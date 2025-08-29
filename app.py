@@ -102,16 +102,16 @@ def api_units():
             return jsonify(cached), 200
 
     soql = """
-      SELECT Id, Name, Status__c, Category__c, Community__c, Project_Name__c,
-             Unit_Type__c, View__c, Beds__c, Baths__c, Built_up_Area__c,
-             Price__c, Price_Per_SqFt__c, Rent_Frequency__c, Ownership__c,
-             Tenure__c, Furnished__c, Parking__c, Emirate__c, City__c,
-             Reference_No__c, Trakheesi_Permit_No__c,
-             CreatedDate, LastModifiedDate
-      FROM Unit__c
-      ORDER BY LastModifiedDate DESC
-      LIMIT 100
+        SELECT Id, Name,Reference_Number__c,RecordType.Name,
+          Unit_Type__c,Beds__c, Floor__c,Unit_No__c,
+          Built_up_Area__c,Status__c, Price__c,
+          Community__c,Building__r.Name
+        FROM Unit__c
+        ORDER BY LastModifiedDate DESC
+        LIMIT 100
     """.strip().replace("\n", " ").replace("  ", " ")
+
+
 
     r = sf_get("/services/data/v61.0/query", params={"q": soql})
     if r.status_code != 200:

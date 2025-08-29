@@ -1,0 +1,81 @@
+/* Page & cards */
+:root{
+  --bg:#f6f8fb;
+  --border:#e9ecf1;
+  --text-muted:#6c757d;
+  --chip-bg:#eef2f7;
+  --chip-text:#2b3a4a;
+  --mono-bg:#0d1117;
+  --mono-text:#e6edf3;
+  --shadow: 0 10px 30px rgba(2, 22, 58, 0.06);
+}
+
+.bg-page{ background:var(--bg); }
+.card-surface{ border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); }
+.page-title{ font-weight:700; letter-spacing:.2px; }
+
+/* Table */
+.table-scroll{
+  max-height: 70vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.table{
+  margin:0;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.table thead.table-head th{
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.table tbody td{
+  vertical-align: middle;
+}
+
+/* Badges (soft variants) */
+.badge.text-bg-primary-soft{ color:#0b5ed7; background: #e7f0ff; border: 1px solid #d8e6ff; }
+.badge.text-bg-info-soft{    color:#0aa2c0; background: #e6f7fb; border: 1px solid #d4eef7; }
+.badge.text-bg-success-soft{ color:#0f5132; background: #eaf6ee; border: 1px solid #d7ecde; }
+.badge.text-bg-danger-soft{  color:#842029; background: #fcebed; border: 1px solid #f6d7db; }
+.badge.text-bg-muted{        color:#5c6773; background:#eef2f6; border:1px solid #e3e7ee; }
+
+/* Chips & mono */
+.chip{
+  display:inline-block;
+  padding:.15rem .5rem;
+  border-radius:999px;
+  background:var(--chip-bg);
+  color:var(--chip-text);
+  font-size:.8rem;
+  line-height:1.2;
+  border:1px solid var(--border);
+}
+.mono{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  padding: .15rem .4rem;
+  background: #f3f4f6;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-size: .85rem;
+}
+
+/* Empty state */
+.empty-state{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  padding: 3rem 1rem 2rem;
+  color: var(--text-muted);
+}
+.empty-emoji{ width:48px; height:48px; opacity:.7; margin-bottom:.5rem; }
+.empty-text{ margin:0; font-size:.95rem; }
+
+/* Small utilities */
+.text-muted{ color:var(--text-muted)!important; }

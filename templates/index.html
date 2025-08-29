@@ -5,29 +5,39 @@
   <title>Available Units – Public (Salesforce Sandbox)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <!-- Your custom CSS -->
+  <!-- optional custom styles (create static/site.css in your repo) -->
   <link rel="stylesheet" href="/static/site.css">
+  <style>
+    /* Minimal inline styles in case /static/site.css isn't present */
+    :root{
+      --bg:#f6f8fb; --border:#e9ecf1; --muted:#6c757d;
+    }
+    body{ background:var(--bg); }
+    .card{ border:1px solid var(--border); border-radius:16px; }
+    .table-scroll{ max-height:70vh; overflow:auto; border:1px solid var(--border); border-radius:12px }
+    thead th{ position:sticky; top:0; background:#fff; z-index:1; border-bottom:1px solid var(--border) }
+    .badge.text-bg-info-soft{ color:#0aa2c0; background:#e6f7fb; border:1px solid #d4eef7 }
+    .chip{ display:inline-block; padding:.15rem .5rem; border-radius:999px; background:#eef2f7; border:1px solid var(--border); font-size:.8rem }
+    .empty-state{ display:flex; flex-direction:column; align-items:center; color:var(--muted); padding:2rem 0 }
+  </style>
 </head>
-<body class="bg-page">
+<body>
 <header class="container py-4">
   <div class="d-flex flex-wrap gap-3 justify-content-between align-items-end">
     <div>
-      <h1 class="page-title mb-1">Available Units</h1>
+      <h1 class="h4 mb-1">Available Units</h1>
       <p class="text-muted small m-0">Live from Salesforce (Sandbox). Data is cached briefly for performance.</p>
     </div>
-    <div class="d-flex gap-2">
-      <button id="btn-refresh" class="btn btn-outline-primary">
-        <span class="spinner-border spinner-border-sm me-2 d-none" id="spin-refresh" role="status" aria-hidden="true"></span>
-        Refresh
-      </button>
-    </div>
+    <button id="btn-refresh" class="btn btn-outline-primary">
+      <span class="spinner-border spinner-border-sm me-2 d-none" id="spin-refresh" role="status" aria-hidden="true"></span>
+      Refresh
+    </button>
   </div>
 </header>
 
 <main class="container pb-5">
-  <div class="card shadow-sm card-surface">
+  <div class="card shadow-sm">
     <div class="card-body">
-      <!-- Controls / status line -->
       <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
         <div class="small text-muted">
           <span id="hint" class="me-2"></span>
@@ -38,119 +48,82 @@
 
       <div class="table-responsive table-scroll">
         <table class="table table-sm align-middle" id="units-table">
-          <thead class="table-head">
-            <tr id="head-row"></tr>
-          </thead>
-          <tbody id="rows">
-            <tr><td class="text-muted p-4">Loading…</td></tr>
-          </tbody>
+          <thead><tr id="head-row"></tr></thead>
+          <tbody id="rows"><tr><td class="text-muted p-4">Loading…</td></tr></tbody>
         </table>
       </div>
 
       <div class="empty-state d-none" id="empty">
-        <img alt="" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f4dd.svg" class="empty-emoji">
-        <p class="empty-text">No records to display.</p>
+        <div class="mb-2">🗂️</div>
+        <div>No records to display.</div>
       </div>
     </div>
   </div>
 </main>
 
 <footer class="container py-4 small text-muted">
-  <span>Powered by Salesforce REST API • Cached for quick loading</span>
+  Powered by Salesforce REST API • Cached for quick loading
 </footer>
 
 <script>
-/* ----------- Columns to display: [Label, FieldAPIName, typeHint?] ----------- */
+/* ---------- Columns (label, fieldExpr, renderHint?) ----------
+   Use "|" in fieldExpr for fallbacks. Use dotted paths for lookups.
+-------------------------------------------------------------- */
 const COLS = [
-  ["Id","Id"],
-  ["Title","Name"],
-  ["Status","Status__c","badge"],
-  ["Category","Category__c"],
-  ["Community","Community__c"],
-  ["Project","Project_Name__c"],
-  ["Unit Type","Unit_Type__c"],
-  ["View","View__c"],
-  ["Beds","Beds__c","chip"],
-  ["Baths","Baths__c","chip"],
-  ["BUA (sqft)","Built_up_Area__c","num"],
-  ["Price","Price__c","currency"],
-  ["Price/ft²","Price_Per_SqFt__c","currency"],
-  ["Rent Freq","Rent_Frequency__c"],
-  ["Ownership","Ownership__c"],
-  ["Tenure","Tenure__c"],
-  ["Furnished","Furnished__c","badge-gray"],
-  ["Parking","Parking__c","badge-gray"],
-  ["Emirate","Emirate__c"],
-  ["City","City__c"],
-  ["Ref #","Reference_No__c","mono"],
-  ["Trakheesi #","Trakheesi_Permit_No__c","mono"],
-  ["Created","CreatedDate","date"],
-  ["Last Modified","LastModifiedDate","date"],
+  ["Title",            "Name"],
+  ["Reference Number", "Reference_Number__c"],
+  ["Record Type",      "RecordTypeId"],
+  ["Unit Type",        "Unit_Type__c"],
+  ["Beds",             "Beds__c", "chip"],
+  ["Floor",            "Floor__c"],
+  ["Unit No",           "Unit_No__c"],
+  ["Built-up Area",    "Built_up_Area__c", "num"],
+  ["Booking Status",   "Booking_Status__c|Status__c", "badge"],
+  ["Price",            "Price__c", "currency"],
+  ["Community",        "Community__c"],
+  ["Building",         "Building__r.Name|Building_Name__c"]
 ];
 
+/* ---------- table header ---------- */
 function renderHeader(){
   document.getElementById("head-row").innerHTML =
     COLS.map(([label]) => `<th scope="col">${label}</th>`).join("");
 }
 
-function fmtBoolean(v){
-  if (v === true)  return '<span class="badge text-bg-success-soft">Yes</span>';
-  if (v === false) return '<span class="badge text-bg-danger-soft">No</span>';
+/* ---------- utils ---------- */
+function escapeHtml(s){ const t=document.createElement("textarea"); t.textContent=s; return t.innerHTML; }
+function getByPath(obj, path){
+  return path.split('.').reduce((o,k)=> (o && o[k]!==undefined) ? o[k] : undefined, obj);
+}
+function getValueWithFallback(rec, expr){
+  for (const p of expr.split("|")){
+    const v = p.includes(".") ? getByPath(rec, p) : rec[p];
+    if (v !== undefined && v !== null && v !== "") return v;
+  }
   return "";
 }
-function fmtNumber(v){
-  if (v === null || v === undefined || v === "") return "";
-  const n = Number(v);
-  if (Number.isNaN(n)) return v;
-  return new Intl.NumberFormat().format(n);
-}
-function fmtCurrency(v){
-  if (v === null || v === undefined || v === "") return "";
-  const n = Number(v);
-  if (Number.isNaN(n)) return v;
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n);
-}
-function fmtDate(v){
-  if (!v) return "";
-  // Salesforce ISO format — display local date/time short
-  const d = new Date(v);
-  if (isNaN(d.getTime())) return v;
-  return d.toLocaleString();
-}
-function badge(text, tone="primary"){
-  if (!text) return "";
-  return `<span class="badge text-bg-${tone}-soft">${escapeHtml(String(text))}</span>`;
-}
-function chip(text){
-  if (!text) return "";
-  return `<span class="chip">${escapeHtml(String(text))}</span>`;
-}
-function mono(text){
-  if (!text) return "";
-  return `<span class="mono">${escapeHtml(String(text))}</span>`;
-}
-function escapeHtml(s){
-  const t = document.createElement("textarea");
-  t.textContent = s;
-  return t.innerHTML;
-}
 
-function renderCell(rec, field, hint){
-  const val = rec[field];
-  switch (hint){
-    case "badge":      return badge(val, "info");
-    case "badge-gray": return badge(val, "muted");
-    case "chip":       return chip(val);
-    case "num":        return fmtNumber(val);
-    case "currency":   return fmtCurrency(val);
-    case "date":       return fmtDate(val);
-    case "mono":       return mono(val);
+/* ---------- formatters ---------- */
+function fmtBoolean(v){ if(v===true) return '<span class="badge text-bg-success">Yes</span>'; if(v===false) return '<span class="badge text-bg-danger">No</span>'; return ""; }
+function fmtNumber(v){ if(v===null||v===undefined||v==="") return ""; const n=Number(v); return Number.isNaN(n)? v : new Intl.NumberFormat().format(n); }
+function fmtCurrency(v){ if(v===null||v===undefined||v==="") return ""; const n=Number(v); return Number.isNaN(n)? v : new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(n); }
+function badge(text){ if(!text) return ""; return `<span class="badge text-bg-info-soft">${escapeHtml(String(text))}</span>`; }
+function chip(text){ if(!text) return ""; return `<span class="chip">${escapeHtml(String(text))}</span>`; }
+
+function renderCell(rec, fieldExpr, hint){
+  const val = getValueWithFallback(rec, fieldExpr);
+  switch(hint){
+    case "badge":    return badge(val);
+    case "chip":     return chip(val);
+    case "num":      return fmtNumber(val);
+    case "currency": return fmtCurrency(val);
     default:
-      if (val === true || val === false) return fmtBoolean(val);
+      if(val===true || val===false) return fmtBoolean(val);
       return val ?? "";
   }
 }
 
+/* ---------- load units (robust JSON handling) ---------- */
 async function loadUnits(force=false){
   renderHeader();
   const rows  = document.getElementById("rows");
@@ -160,17 +133,15 @@ async function loadUnits(force=false){
   const count = document.getElementById("recordCount");
   const spin  = document.getElementById("spin-refresh");
 
-  msg.textContent = "";
-  hint.textContent = "";
-  empty.classList.add("d-none");
-  count.classList.add("d-none");
+  msg.textContent = ""; hint.textContent=""; empty.classList.add("d-none"); count.classList.add("d-none");
   rows.innerHTML = `<tr><td colspan="${COLS.length}" class="py-4">Loading…</td></tr>`;
-  spin.classList.remove("d-none");
+  spin?.classList.remove("d-none");
 
   try{
-    const url = "/api/units" + (force ? "?refresh=1" : "");
-    const r = await fetch(url);
-    const data = await r.json();
+    const r = await fetch("/api/units" + (force ? "?refresh=1" : ""));
+    const ct = r.headers.get("content-type") || "";
+    const data = ct.includes("application/json") ? await r.json() : { ok:false, error: await r.text() };
+
     if (!r.ok || !data.ok) throw new Error(typeof data.error === "string" ? data.error : JSON.stringify(data.error));
 
     if (!data.records?.length){
@@ -180,14 +151,12 @@ async function loadUnits(force=false){
       return;
     }
 
-    // Build rows
     rows.innerHTML = data.records.map(rec => `
       <tr>
-        ${COLS.map(([_, f, h]) => `<td>${renderCell(rec, f, h)}</td>`).join("")}
+        ${COLS.map(([_, fieldExpr, hint]) => `<td>${renderCell(rec, fieldExpr, hint)}</td>`).join("")}
       </tr>
     `).join("");
 
-    // Status line
     hint.textContent = data.fromCache
       ? `served from cache (ttl ${data.cacheTtl}s)`
       : `fresh from Salesforce (cached ${data.cacheTtl}s)`;
@@ -197,16 +166,13 @@ async function loadUnits(force=false){
     msg.textContent = "Error: " + e.message;
     rows.innerHTML = `<tr><td colspan="${COLS.length}" class="text-danger py-4">Failed to load.</td></tr>`;
   }finally{
-    spin.classList.add("d-none");
+    spin?.classList.add("d-none");
   }
 }
 
-/* Auto-load immediately when the page opens */
-window.addEventListener("DOMContentLoaded", () => {
-  loadUnits();   // load immediately when page opens
-});
-
-/* Manual refresh */
+/* auto-load on open */
+window.addEventListener("DOMContentLoaded", () => { loadUnits(); });
+/* manual refresh */
 document.getElementById("btn-refresh").addEventListener("click", () => loadUnits(true));
 </script>
 </body>

@@ -2,29 +2,63 @@ from flask import Flask, render_template, jsonify, request
 import os, time, requests
 from dotenv import load_dotenv
 
+# Rate limiting
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "change_me")
 PORT = int(os.getenv("PORT", "5000"))
 
-# ---- Salesforce integration creds (server-only; never sent to browser)
-SF_LOGIN_URL   = os.getenv("SF_LOGIN_URL", "https://test.salesforce.com").rstrip("/")
-SF_CLIENT_ID   = os.getenv("SF_CLIENT_ID", "")
+# ---------------- Security headers ----------------
+CSP = (
+    "default-src 'self' https: data:; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+@app.after_request
+def add_security_headers(resp):
+    resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "no-referrer-when-downgrade"
+    resp.headers["Content-Security-Policy"] = CSP
+    return resp
+
+# ---------------- Rate limiter ----------------
+RATE_LIMIT = os.getenv("RATE_LIMIT", "60 per minute")
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[RATE_LIMIT],
+    storage_uri=os.getenv("LIMITER_STORAGE_URI", "memory://"),  # use Redis in multi-instance
+)
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    return jsonify(ok=False, error="Rate limit exceeded. Try again soon."), 429
+
+# ---------------- Salesforce creds ----------------
+SF_LOGIN_URL     = os.getenv("SF_LOGIN_URL", "https://test.salesforce.com").rstrip("/")
+SF_CLIENT_ID     = os.getenv("SF_CLIENT_ID", "")
 SF_CLIENT_SECRET = os.getenv("SF_CLIENT_SECRET", "")
 SF_REFRESH_TOKEN = os.getenv("SF_REFRESH_TOKEN", "")
 SF_INSTANCE_URL  = (os.getenv("SF_INSTANCE_URL") or "").strip()
 
-# ---- In-memory token cache (for single-process dev). Use Redis for multi-instance.
-_token = {
-    "access_token": None,
-    "instance_url": SF_INSTANCE_URL or None,
-    "issued_at": 0,
-}
+# Access token cache (single-process)
+_token = {"access_token": None, "instance_url": SF_INSTANCE_URL or None, "issued_at": 0}
 
-# ---- Simple TTL cache (in-memory). Use Redis in production for multi-instance.
+# Simple in-memory cache (use Redis for multi-instance)
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "60"))
-_cache = {}  # key -> (expires_at, payload)
+_cache = {}  # key -> (expires_at, value)
 
 def cache_get(key: str):
     rec = _cache.get(key)
@@ -46,10 +80,10 @@ def have_creds():
         "SF_REFRESH_TOKEN": SF_REFRESH_TOKEN,
     }.items() if not v]
     if missing:
-        raise RuntimeError(f"Missing in .env: {', '.join(missing)}")
+        raise RuntimeError(f"Missing in environment: {', '.join(missing)}")
 
 def refresh_access_token():
-    """Exchange long-lived refresh token for a new access token."""
+    """Use the long-lived refresh token to get a fresh access token."""
     have_creds()
     token_url = f"{SF_LOGIN_URL}/services/oauth2/token"
     data = {
@@ -68,74 +102,99 @@ def refresh_access_token():
     _token["issued_at"] = int(time.time())
 
 def sf_get(path: str, params=None):
-    """GET wrapper. If 401, refresh and retry once."""
+    """GET wrapper with 401 retry once after refresh."""
     if not _token["access_token"]:
         refresh_access_token()
     base = _token["instance_url"]
     if not base:
-        # fetch a token to populate instance_url
         refresh_access_token()
         base = _token["instance_url"]
     url = path if path.startswith("http") else f"{base.rstrip('/')}/{path.lstrip('/')}"
     headers = {"Authorization": f"Bearer {_token['access_token']}"}
     r = requests.get(url, params=params, headers=headers, timeout=30)
     if r.status_code == 401:
-        # token expired or revoked -> refresh and retry once
         refresh_access_token()
         headers = {"Authorization": f"Bearer {_token['access_token']}"}
         r = requests.get(url, params=params, headers=headers, timeout=30)
     return r
 
+# ---------------- Unit Type mapping (API code -> label) ----------------
+UNIT_TYPE_MAP = {
+    "AP": "Apartment",
+    "BU": "Bulk Units",
+    "BW": "Bungalow",
+    "CD": "Compound",
+    "DX": "Duplex",
+    "FF": "Full Floor",
+    "HF": "Half Floor",
+    "HA": "Hotel & Hotel Apartment",
+    "PH": "Penthouse",
+    "TH": "Townhouse",
+    "BC": "Business Center",
+    "CW": "Co-working space",
+    "FA": "Factory",
+    "FM": "Farm",
+    "LC": "Labor Camp",
+}
+
+# ---------------- Routes ----------------
 @app.route("/")
+@limiter.exempt
 def index():
     return render_template("index.html")
 
 @app.get("/api/units")
+@limiter.limit(RATE_LIMIT)
 def api_units():
-    """Public endpoint: returns Unit__c list (cached)."""
+    """Public endpoint. Returns Unit__c rows (cached) and includes Unit_Type_Label."""
     force_refresh = request.args.get("refresh") == "1"
-    CACHE_KEY = "units:list:v1"
+    CACHE_KEY = "units:list:v2"  # bump key when changing payload structure
 
     if not force_refresh:
         cached = cache_get(CACHE_KEY)
         if cached:
             return jsonify(cached), 200
 
+    # SOQL – keep clean; no comments
     soql = """
-        SELECT Id, Name,Reference_Number__c,RecordType.Name,
-          Unit_Type__c,Beds__c, Floor__c,Unit_No__c,
-          Built_up_Area__c,Status__c, Price__c,
-          Community__c,Building__r.Name
-        FROM Unit__c
-        ORDER BY LastModifiedDate DESC
-        LIMIT 100
+      SELECT Id, Name, Reference_Number__c, RecordType.Name,
+             Unit_Type__c, Beds__c, Floor__c, Unit_No__c,
+             Built_up_Area__c, Status__c, Price__c, Community__c,
+             Building__r.Name, LastModifiedDate
+      FROM Unit__c
+      ORDER BY LastModifiedDate DESC
+      LIMIT 200
     """.strip().replace("\n", " ").replace("  ", " ")
-
-
 
     r = sf_get("/services/data/v61.0/query", params={"q": soql})
     if r.status_code != 200:
-        # serve last good data if available
         fallback = cache_get(CACHE_KEY)
         if fallback:
             return jsonify(fallback), 200
         return jsonify(ok=False, error=r.text), r.status_code
 
     data = r.json()
+    records = data.get("records", [])
+
+    # Map Unit_Type__c codes to human labels
+    for rec in records:
+        code = rec.get("Unit_Type__c")
+        rec["Unit_Type_Label"] = UNIT_TYPE_MAP.get(code, code)
+
     payload = {
         "ok": True,
         "fromCache": False,
         "cacheTtl": CACHE_TTL_SECONDS,
         "totalSize": data.get("totalSize", 0),
-        "records": data.get("records", []),
+        "records": records,
     }
-    # store a copy marked as fromCache for subsequent hits
     cache_set(CACHE_KEY, {**payload, "fromCache": True})
     return jsonify(payload), 200
 
 @app.get("/api/units/describe")
+@limiter.limit(RATE_LIMIT)
 def api_units_describe():
-    """Public endpoint: returns Unit__c metadata (cached longer)."""
+    """Helpful metadata (cached ~5 min)."""
     force_refresh = request.args.get("refresh") == "1"
     CACHE_KEY = "units:describe:v1"
 
@@ -153,11 +212,13 @@ def api_units_describe():
 
     d = r.json()
     fields = [{"name": f["name"], "label": f["label"], "type": f["type"]} for f in d.get("fields", [])]
-    payload = {"ok": True, "fromCache": False, "cacheTtl": max(CACHE_TTL_SECONDS, 300), "fields": fields}
-    cache_set(CACHE_KEY, {**payload, "fromCache": True}, ttl=max(CACHE_TTL_SECONDS, 300))
+    ttl = max(CACHE_TTL_SECONDS, 300)
+    payload = {"ok": True, "fromCache": False, "cacheTtl": ttl, "fields": fields}
+    cache_set(CACHE_KEY, {**payload, "fromCache": True}, ttl=ttl)
     return jsonify(payload), 200
 
 @app.get("/healthz")
+@limiter.exempt
 def healthz():
     return "ok", 200
 
